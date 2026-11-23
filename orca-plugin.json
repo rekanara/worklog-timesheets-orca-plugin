@@ -1,0 +1,83 @@
+{
+  "manifestVersion": 2,
+  "execution": "trusted-worker",
+  "id": "worklog",
+  "name": "Worklog: Timesheets",
+  "version": "0.1.0",
+  "description": "Timesheet and work log written by your coding agents: what was done each day, per project and area, collected automatically from agent notes and Git commits. Monthly report export as Markdown or CSV for clients or your manager.",
+  "license": "MIT",
+  "engines": {
+    "orca": ">=1.4.259"
+  },
+  "pluginApi": 1,
+  "main": "worker/main.mjs",
+  "contributes": {
+    "panels": [
+      {
+        "id": "worklog",
+        "title": "Worklog",
+        "icon": "calendar",
+        "entry": "panel/index.html"
+      }
+    ],
+    "settings": [
+      {
+        "key": "language",
+        "title": "Language",
+        "description": "Language of the panel, the reports and the notes agents are asked to write.",
+        "type": "string",
+        "enum": [
+          "auto",
+          "id",
+          "en"
+        ],
+        "enumLabels": [
+          "Automatic (follow this computer)",
+          "Bahasa Indonesia",
+          "English"
+        ],
+        "default": "auto"
+      },
+      {
+        "key": "includeCommits",
+        "title": "Include my Git commits",
+        "description": "Adds your own commits (matched by git config user.email) from local repositories, so work is logged even when an agent left no note.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "hideFromGit",
+        "title": "Keep .worklog out of Git",
+        "description": "Adds .worklog/ to each local repository's .git/info/exclude, which only applies on this computer and is never committed.",
+        "type": "boolean",
+        "default": true
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "today",
+        "text": "Worklog",
+        "icon": "calendar",
+        "tooltip": "Worklog: today's work",
+        "command": "worklog.today"
+      }
+    ],
+    "commands": [
+      {
+        "id": "worklog.today",
+        "title": "Worklog: Show what I did today"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "settings:own"
+    }
+  ]
+}

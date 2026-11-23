@@ -1,0 +1,403 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root {
+        --fg: var(--orca-foreground, #e6e6e6);
+        --bg: var(--orca-background, transparent);
+        --muted: var(--orca-muted-foreground, #9a9a9a);
+        --line: var(--orca-border, #3a3a3a);
+        --accent: var(--orca-primary, #6aa6ff);
+        --accent-fg: var(--orca-primary-foreground, #0b1a33);
+        --danger: var(--orca-destructive, #e5534b);
+        --radius: var(--orca-radius, 6px);
+        --mono: var(--orca-font-mono, ui-monospace, Menlo, Consolas, monospace);
+        --tint: color-mix(in srgb, var(--fg) 8%, transparent);
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 12px 12px 28px; font: 13px/1.45 var(--orca-font-sans, system-ui, sans-serif); color: var(--fg); background: var(--bg); }
+      button, input, select, textarea { font: inherit; color: var(--fg); }
+      button { background: transparent; border: 1px solid var(--line); border-radius: var(--radius); padding: 3px 9px; cursor: pointer; white-space: nowrap; }
+      button:hover:not(:disabled) { border-color: var(--fg); }
+      button:disabled { opacity: 0.5; cursor: default; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+      button.ghost { border-color: transparent; padding: 3px 6px; }
+      button.danger:hover { border-color: var(--danger); color: var(--danger); }
+      :is(button, input, select, textarea, summary, .item):focus-visible { outline: 2px solid var(--orca-ring, var(--accent)); outline-offset: 1px; }
+      input, select, textarea { width: 100%; background: var(--orca-input, transparent); border: 1px solid var(--line); border-radius: var(--radius); padding: 5px 7px; }
+      textarea { resize: vertical; min-height: 48px; }
+      label.check { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); cursor: pointer; }
+      label.check input { width: auto; }
+      [hidden] { display: none !important; }
+
+      .top { display: flex; align-items: center; gap: 4px; }
+      .top .month { flex: 1; text-align: center; font-weight: 650; font-size: 14px; }
+      .actions { display: flex; gap: 6px; margin: 10px 0 2px; align-items: center; }
+      .actions .grow { flex: 1; }
+      .summary { color: var(--muted); font-size: 12px; margin-top: 6px; }
+
+      form.edit { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); margin: 10px 0; }
+      form.edit .two { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+      form.edit .row { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+      form.edit .row .grow { flex: 1; }
+
+      .day { margin-top: 18px; }
+      .day h2 { font-size: 13px; margin: 0 0 2px; display: flex; gap: 6px; align-items: baseline; }
+      .day h2 .n { color: var(--muted); font-weight: 400; font-size: 12px; }
+      .day.today h2::after { content: attr(data-today); font-size: 10.5px; font-weight: 500; padding: 0 6px; border-radius: 999px; background: var(--accent); color: var(--accent-fg); }
+      .proj { margin: 8px 0 0; padding-left: 10px; border-left: 2px solid var(--line); }
+      .proj h3 { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin: 0 0 2px; font-weight: 600; }
+      .area { margin: 4px 0 6px; }
+      .area .name { font-weight: 600; font-size: 12.5px; }
+      .item { display: block; padding: 2px 4px 2px 12px; margin: 1px 0; border-radius: 4px; cursor: pointer; position: relative; overflow-wrap: anywhere; }
+      .item::before { content: ''; position: absolute; left: 3px; top: 0.72em; width: 4px; height: 4px; border-radius: 50%; background: var(--muted); }
+      .item:hover { background: var(--tint); }
+      .item.commit { color: var(--muted); }
+      .item.commit::before { border-radius: 0; }
+      .item .src { color: var(--muted); font-size: 11px; margin-left: 4px; white-space: nowrap; }
+      .item ul { margin: 1px 0 0; padding-left: 14px; color: var(--muted); font-size: 12px; }
+
+      .empty { color: var(--muted); padding: 18px 2px; font-size: 12.5px; }
+      .error { border: 1px solid var(--danger); border-radius: var(--radius); padding: 7px 9px; margin: 10px 0; font-size: 12px; overflow-wrap: anywhere; }
+
+      section.report { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 8px; }
+      section.report h2 { font-size: 13px; margin: 0; }
+      .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+      .seg button { border: 0; border-radius: 0; font-size: 12px; padding: 2px 9px; }
+      .seg button[aria-pressed='true'] { background: var(--tint); font-weight: 600; }
+      .line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+      .btns { display: flex; gap: 6px; flex-wrap: wrap; }
+      .msg { font-size: 12px; color: var(--muted); min-height: 1em; }
+      textarea.preview { font: 11px/1.45 var(--mono); min-height: 160px; color: var(--muted); }
+
+      details.setup { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 10px; }
+      details.setup summary { cursor: pointer; font-weight: 600; font-size: 12.5px; }
+      details.setup p { color: var(--muted); font-size: 12px; margin: 8px 0; }
+      details.setup code { font-family: var(--mono); font-size: 11.5px; color: var(--fg); }
+      details.setup textarea { font: 11px/1.45 var(--mono); min-height: 150px; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <div class="top">
+      <button class="ghost" id="prev" aria-label="previous month">‹</button>
+      <div class="month" id="month"></div>
+      <button class="ghost" id="next" aria-label="next month">›</button>
+    </div>
+    <div class="actions">
+      <button id="addBtn"></button>
+      <button id="scanBtn"></button>
+      <span class="grow"></span>
+      <label class="check"><input type="checkbox" id="showCommits" /><span id="showCommitsLabel"></span></label>
+    </div>
+    <div class="summary" id="summary"></div>
+    <div class="error" id="error" hidden></div>
+
+    <form class="edit" id="form" hidden>
+      <input id="fText" maxlength="300" required />
+      <div class="two">
+        <input type="date" id="fDate" required />
+        <input id="fArea" maxlength="60" />
+      </div>
+      <select id="fProject"></select>
+      <textarea id="fDetails" maxlength="1500"></textarea>
+      <div class="row">
+        <button type="button" class="danger" id="fDelete" hidden></button>
+        <span class="grow"></span>
+        <button type="button" id="fCancel"></button>
+        <button type="submit" class="primary" id="fSave"></button>
+      </div>
+    </form>
+
+    <div id="days"></div>
+
+    <section class="report">
+      <h2 id="rTitle"></h2>
+      <div class="line"><span id="rGroupLabel"></span>
+        <span class="seg" id="rGroup"><button data-g="project" aria-pressed="true"></button><button data-g="date" aria-pressed="false"></button></span>
+      </div>
+      <input id="rName" maxlength="80" />
+      <div class="btns">
+        <button class="primary" id="rCopy"></button>
+        <button id="rMd"></button>
+        <button id="rCsv"></button>
+      </div>
+      <div class="msg" id="rMsg" aria-live="polite"></div>
+      <details><summary class="line" id="rPreviewLabel"></summary><textarea class="preview" id="rPreview" readonly></textarea></details>
+    </section>
+
+    <details class="setup">
+      <summary id="setupTitle"></summary>
+      <p id="setupIntro"></p>
+      <p id="setupWhere"></p>
+      <textarea id="protocol" readonly></textarea>
+      <div class="btns" style="margin-top:6px"><button id="copyProtocol"></button></div>
+    </details>
+
+    <script>
+      'use strict'
+      // Never redeclare `orca` here: window.orca is a non-configurable global, and a top-level
+      // `const orca` throws a SyntaxError that stops the whole script (blank panel).
+      const plugin = window.orca.plugin
+      const $ = (id) => document.getElementById(id)
+      const STR = {
+        id: {
+          locale: 'id-ID', add: 'Tambah', scan: 'Ambil catatan', showCommits: 'Tampilkan commit', today: 'hari ini',
+          summary: (n, d, p) => n ? `${n} pekerjaan, ${d} hari, ${p} project` : '',
+          empty: 'Belum ada pekerjaan tercatat bulan ini. Catatan muncul otomatis setelah agent menyelesaikan tugas (lihat <b>Siapkan agent</b> di bawah), dari commit Git-mu, atau tambahkan sendiri.',
+          noProject: 'Tanpa project', general: 'Umum', src: { agent: 'agent', me: 'manual', commit: 'commit' },
+          text: 'Apa yang dikerjakan?', area: 'Bagian (mis. checkout)', details: 'Detail, satu per baris (opsional)',
+          save: 'Simpan', cancel: 'Batal', del: 'Hapus', confirmDel: 'Hapus catatan ini?',
+          rTitle: 'Laporan bulanan', rGroup: 'Kelompokkan per', byProject: 'Project', byDate: 'Tanggal', rName: 'Nama di laporan (opsional)',
+          copy: 'Salin laporan', md: 'Unduh Markdown', csv: 'Unduh CSV (Excel)', copied: 'Laporan tersalin.', selected: 'Teks laporan dipilih di pratinjau, tekan Ctrl+C atau Cmd+C.',
+          saved: 'Tersimpan.', preview: 'Pratinjau',
+          setup: 'Siapkan agent',
+          intro: 'Agar agent menulis catatan setiap selesai tugas, tambahkan instruksi ini ke instruksi pribadi agent-mu. Cukup sekali, berlaku di semua project, dan tidak mengubah file di repo.',
+          where: 'Lokasinya: Claude Code di <code>~/.claude/CLAUDE.md</code>, Codex di <code>~/.codex/AGENTS.md</code>, Gemini CLI di <code>~/.gemini/GEMINI.md</code>.',
+          copyProtocol: 'Salin instruksi'
+        },
+        en: {
+          locale: 'en-GB', add: 'Add', scan: 'Collect notes', showCommits: 'Show commits', today: 'today',
+          summary: (n, d, p) => n ? `${n} items, ${d} days, ${p} project${p === 1 ? '' : 's'}` : '',
+          empty: 'No work logged this month. Entries appear on their own when agents finish tasks (see <b>Set up your agents</b> below), from your Git commits, or add one yourself.',
+          noProject: 'No project', general: 'General', src: { agent: 'agent', me: 'manual', commit: 'commit' },
+          text: 'What was done?', area: 'Area (e.g. checkout)', details: 'Details, one per line (optional)',
+          save: 'Save', cancel: 'Cancel', del: 'Delete', confirmDel: 'Delete this entry?',
+          rTitle: 'Monthly report', rGroup: 'Group by', byProject: 'Project', byDate: 'Date', rName: 'Name on the report (optional)',
+          copy: 'Copy report', md: 'Download Markdown', csv: 'Download CSV (Excel)', copied: 'Report copied.', selected: 'Report selected in the preview. Press Ctrl+C or Cmd+C.',
+          saved: 'Saved.', preview: 'Preview',
+          setup: 'Set up your agents',
+          intro: 'To have agents log each finished task, add these instructions to your agent’s personal instructions. Once is enough: it applies to every project and changes nothing in your repositories.',
+          where: 'Where they go: Claude Code in <code>~/.claude/CLAUDE.md</code>, Codex in <code>~/.codex/AGENTS.md</code>, Gemini CLI in <code>~/.gemini/GEMINI.md</code>.',
+          copyProtocol: 'Copy instructions'
+        }
+      }
+      const guess = /^(id|ms|in)\b/i.test(navigator.language || '') ? 'id' : 'en'
+      const pad = (n) => String(n).padStart(2, '0')
+      const todayKey = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` }
+      const thisMonth = () => todayKey().slice(0, 7)
+      let current = thisMonth()
+      let data = null
+      let showCommits = null
+      let groupBy = 'project'
+      let editing = null // entry id, or 'new'
+      let reportCache = { md: null, csv: null }
+      const s = () => STR[(data && data.lang) || guess]
+
+      function el(tag, props, ...kids) {
+        const n = document.createElement(tag)
+        if (props) for (const [k, v] of Object.entries(props)) {
+          if (k === 'on') for (const [ev, fn] of Object.entries(v)) n.addEventListener(ev, fn)
+          else if (k === 'html') n.innerHTML = v
+          else if (k === 'data') for (const [dk, dv] of Object.entries(v)) n.dataset[dk] = dv
+          else n[k] = v
+        }
+        for (const c of kids) if (c != null && c !== false) n.append(c)
+        return n
+      }
+      function showError(e) { $('error').textContent = e ? (e.message || String(e)) : ''; $('error').hidden = !e }
+      async function ask(name, input, timeoutMs = 30000) {
+        showError(null)
+        try { return await plugin.request(name, input || {}, { timeoutMs }) } catch (e) { showError(e); throw e }
+      }
+      function dayLabel(day) {
+        const [y, m, d] = day.split('-').map(Number)
+        return new Date(y, m - 1, d).toLocaleDateString(s().locale, { weekday: 'long', day: 'numeric', month: 'long' })
+      }
+      function monthLabel(key) {
+        const [y, m] = key.split('-').map(Number)
+        return new Date(y, m - 1, 1).toLocaleDateString(s().locale, { month: 'long', year: 'numeric' })
+      }
+      function shiftMonth(delta) {
+        const [y, m] = current.split('-').map(Number)
+        const d = new Date(y, m - 1 + delta, 1)
+        current = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`
+        editing = null
+        load()
+      }
+      function groupMap(arr, keyFn) {
+        const m = new Map()
+        for (const x of arr) { const k = keyFn(x); if (!m.has(k)) m.set(k, []); m.get(k).push(x) }
+        return m
+      }
+
+      function staticText() {
+        const t = s()
+        document.documentElement.lang = (data && data.lang) || guess
+        $('month').textContent = monthLabel(current)
+        $('addBtn').textContent = t.add
+        $('scanBtn').textContent = t.scan
+        $('showCommitsLabel').textContent = t.showCommits
+        $('fText').placeholder = t.text
+        $('fArea').placeholder = t.area
+        $('fDetails').placeholder = t.details
+        $('fSave').textContent = t.save
+        $('fCancel').textContent = t.cancel
+        $('fDelete').textContent = t.del
+        $('rTitle').textContent = `${t.rTitle}, ${monthLabel(current)}`
+        $('rGroupLabel').textContent = t.rGroup
+        document.querySelector('[data-g="project"]').textContent = t.byProject
+        document.querySelector('[data-g="date"]').textContent = t.byDate
+        $('rName').placeholder = t.rName
+        $('rCopy').textContent = t.copy
+        $('rMd').textContent = t.md
+        $('rCsv').textContent = t.csv
+        $('rPreviewLabel').textContent = t.preview
+        $('setupTitle').textContent = t.setup
+        $('setupIntro').textContent = t.intro
+        $('setupWhere').innerHTML = t.where
+        $('copyProtocol').textContent = t.copyProtocol
+        $('next').disabled = current >= thisMonth()
+      }
+
+      function render() {
+        if (!data) return
+        staticText()
+        const t = s()
+        const today = todayKey()
+        shownDay = today
+        $('showCommits').checked = showCommits
+        const items = data.entries.filter((e) => !e.hidden && (showCommits || e.source !== 'commit'))
+        const days = groupMap(items.slice().sort((a, b) => b.at - a.at), (e) => e.date)
+        $('summary').textContent = t.summary(items.length, days.size, new Set(items.map((e) => e.projectName || '')).size)
+
+        if (!items.length) {
+          $('days').replaceChildren(el('div', { className: 'empty', html: t.empty }))
+          return
+        }
+        $('days').replaceChildren(...[...days.entries()].map(([day, list]) => {
+          const projects = groupMap(list.slice().sort((a, b) => a.at - b.at), (e) => e.projectName || t.noProject)
+          return el('div', { className: 'day' + (day === today ? ' today' : '') },
+            el('h2', { data: { today: t.today } }, dayLabel(day), el('span', { className: 'n', textContent: String(list.length) })),
+            ...[...projects.entries()].map(([proj, pList]) => el('div', { className: 'proj' },
+              el('h3', { textContent: proj }),
+              ...[...groupMap(pList, (e) => e.area || t.general).entries()].map(([area, aList]) => el('div', { className: 'area' },
+                el('div', { className: 'name', textContent: area }),
+                ...aList.map(entry)
+              ))
+            ))
+          )
+        }))
+      }
+
+      function entry(e) {
+        const t = s()
+        const open = () => startEdit(e)
+        return el('div', {
+          className: 'item' + (e.source === 'commit' ? ' commit' : ''), tabIndex: 0, role: 'button',
+          on: { click: open, keydown: (ev) => { if (ev.key === 'Enter') open() } }
+        },
+          e.text,
+          el('span', { className: 'src', textContent: e.source === 'commit' ? `commit ${e.hash.slice(0, 7)}` : t.src[e.source] }),
+          e.details && e.details.length ? el('ul', {}, ...e.details.map((d) => el('li', { textContent: d }))) : null
+        )
+      }
+
+      function fillProjects(selected) {
+        $('fProject').replaceChildren(
+          el('option', { value: '', textContent: s().noProject }),
+          ...data.projects.map((p) => el('option', { value: p.id, textContent: p.name }))
+        )
+        $('fProject').value = selected || ''
+      }
+      function startEdit(e) {
+        editing = e ? e.id : 'new'
+        fillProjects(e ? e.projectId : '')
+        $('fText').value = e ? e.text : ''
+        $('fArea').value = e ? e.area || '' : ''
+        $('fDate').value = e ? e.date : (current === thisMonth() ? todayKey() : `${current}-01`)
+        $('fDetails').value = e ? (e.details || []).join('\n') : ''
+        $('fDelete').hidden = !e
+        $('form').hidden = false
+        $('form').scrollIntoView({ block: 'nearest' })
+        $('fText').focus()
+      }
+      function closeEdit() { editing = null; $('form').hidden = true }
+
+      async function refreshReport() {
+        reportCache = { md: null, csv: null }
+        try {
+          const md = await plugin.request('worklog.export', { month: current, format: 'md', groupBy, includeCommits: showCommits, name: $('rName').value }, { timeoutMs: 15000 })
+          const csv = await plugin.request('worklog.export', { month: current, format: 'csv', includeCommits: showCommits }, { timeoutMs: 15000 })
+          reportCache = { md, csv }
+          $('rPreview').value = md.text
+        } catch (e) { showError(e) }
+      }
+
+      async function load() {
+        try {
+          data = await ask('worklog.month', { month: current })
+          if (showCommits === null) showCommits = data.includeCommits
+          $('protocol').value = data.protocol
+          render()
+          refreshReport()
+        } catch {}
+      }
+
+      async function save(file) {
+        if (!file) return
+        const mimeType = file.fileName.endsWith('.csv') ? 'text/csv' : 'text/markdown'
+        try {
+          const r = await window.orca.host.call('files.saveAs', { suggestedName: file.fileName, mimeType, data: file.text })
+          $('rMsg').textContent = r && r.status === 'saved' ? s().saved : ''
+        } catch {
+          // Host save dialog unavailable in this panel: fall back to a plain browser download.
+          const url = URL.createObjectURL(new Blob([file.text], { type: mimeType }))
+          el('a', { href: url, download: file.fileName }).click()
+          setTimeout(() => URL.revokeObjectURL(url), 1000)
+        }
+      }
+
+      // Events
+      plugin.on('worklog.changed', ({ months }) => { if (!months || months.includes(current)) load() })
+      $('prev').addEventListener('click', () => shiftMonth(-1))
+      $('next').addEventListener('click', () => shiftMonth(1))
+      $('addBtn').addEventListener('click', () => (editing === 'new' ? closeEdit() : startEdit(null)))
+      $('scanBtn').addEventListener('click', async () => {
+        $('scanBtn').disabled = true
+        try { await ask('worklog.scan', {}, 90000); await load() } catch {} finally { $('scanBtn').disabled = false }
+      })
+      $('showCommits').addEventListener('change', () => { showCommits = $('showCommits').checked; render(); refreshReport() })
+      $('fCancel').addEventListener('click', closeEdit)
+      $('fDelete').addEventListener('click', async () => {
+        if (!confirm(s().confirmDel)) return
+        try { await ask('worklog.delete', { id: editing, month: current }); closeEdit() } catch {}
+      })
+      $('form').addEventListener('submit', async (ev) => {
+        ev.preventDefault()
+        const payload = { text: $('fText').value, area: $('fArea').value, projectId: $('fProject').value || null, date: $('fDate').value }
+        try {
+          if (editing === 'new') await ask('worklog.add', { ...payload, details: $('fDetails').value })
+          else await ask('worklog.update', { id: editing, month: current, ...payload, details: $('fDetails').value })
+          closeEdit()
+        } catch {}
+      })
+      for (const b of document.querySelectorAll('[data-g]')) b.addEventListener('click', () => {
+        groupBy = b.dataset.g
+        for (const o of document.querySelectorAll('[data-g]')) o.setAttribute('aria-pressed', String(o === b))
+        refreshReport()
+      })
+      let nameTimer
+      $('rName').addEventListener('input', () => { clearTimeout(nameTimer); nameTimer = setTimeout(refreshReport, 400) })
+      $('rCopy').addEventListener('click', async () => {
+        if (!reportCache.md) return
+        try { await navigator.clipboard.writeText(reportCache.md.text); $('rMsg').textContent = s().copied }
+        catch {
+          $('rPreview').closest('details').open = true
+          $('rPreview').focus(); $('rPreview').select()
+          $('rMsg').textContent = s().selected
+        }
+      })
+      $('rMd').addEventListener('click', () => save(reportCache.md))
+      $('rCsv').addEventListener('click', () => save(reportCache.csv))
+      $('copyProtocol').addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText($('protocol').value) } catch { $('protocol').focus(); $('protocol').select() }
+      })
+      // Move the "today" badge and the next-month limit when the panel stays open past midnight.
+      let shownDay = todayKey()
+      setInterval(() => { if (todayKey() !== shownDay) render() }, 60000)
+      staticText()
+      load()
+    </script>
+  </body>
+</html>
