@@ -41,6 +41,7 @@
       form.edit .two { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
       form.edit .row { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
       form.edit .row .grow { flex: 1; }
+      form.edit .hint { font-size: 11.5px; color: var(--muted); }
 
       .day { margin-top: 18px; }
       .day h2 { font-size: 13px; margin: 0 0 2px; display: flex; gap: 6px; align-items: baseline; }
@@ -69,6 +70,9 @@
       .line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
       .btns { display: flex; gap: 6px; flex-wrap: wrap; }
       .msg { font-size: 12px; color: var(--muted); min-height: 1em; }
+      .warn { font-size: 12px; border-left: 2px solid var(--danger); padding: 2px 8px; margin-top: 8px; }
+      .filter { margin-top: 8px; }
+      .line select { width: auto; flex: 1; min-width: 0; padding: 2px 6px; }
       textarea.preview { font: 11px/1.45 var(--mono); min-height: 160px; color: var(--muted); }
 
       details.setup { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 10px; }
@@ -90,6 +94,8 @@
       <span class="grow"></span>
       <label class="check"><input type="checkbox" id="showCommits" /><span id="showCommitsLabel"></span></label>
     </div>
+    <div class="line filter"><label for="rProject" id="rProjectLabel"></label><select id="rProject"></select></div>
+    <div class="warn" id="rWarn" hidden></div>
     <div class="summary" id="summary"></div>
     <div class="error" id="error" hidden></div>
 
@@ -99,7 +105,11 @@
         <input type="date" id="fDate" required />
         <input id="fArea" maxlength="60" />
       </div>
-      <select id="fProject"></select>
+      <div class="two">
+        <select id="fProject"></select>
+        <input type="number" id="fHours" min="0" max="24" step="0.25" inputmode="decimal" />
+      </div>
+      <div class="hint" id="fHint" hidden></div>
       <textarea id="fDetails" maxlength="1500"></textarea>
       <div class="row">
         <button type="button" class="danger" id="fDelete" hidden></button>
@@ -134,6 +144,17 @@
       <div class="btns" style="margin-top:6px"><button id="copyProtocol"></button></div>
     </details>
 
+    <details class="setup">
+      <summary id="backupTitle"></summary>
+      <p id="backupIntro"></p>
+      <div class="btns">
+        <button id="backupBtn"></button>
+        <button id="restoreBtn"></button>
+        <input type="file" id="restoreFile" accept=".json,application/json" hidden />
+      </div>
+      <div class="msg" id="bMsg" aria-live="polite" style="margin-top:6px"></div>
+    </details>
+
     <script>
       'use strict'
       // Never redeclare `orca` here: window.orca is a non-configurable global, and a top-level
@@ -143,33 +164,55 @@
       const STR = {
         id: {
           locale: 'id-ID', add: 'Tambah', scan: 'Ambil catatan', showCommits: 'Tampilkan commit', today: 'hari ini',
-          summary: (n, d, p) => n ? `${n} pekerjaan, ${d} hari, ${p} project` : '',
+          summary: (n, d, p, h) => n ? `${n} pekerjaan, ${d} hari, ${p} project${h ? `, ${h}` : ''}` : '',
+          hours: 'Jam (opsional)', hourUnit: 'jam',
+          ruleHint: 'Project yang kamu pilih juga dipakai untuk catatan lain tanpa project dari repo yang sama, termasuk yang berikutnya.',
           empty: 'Belum ada pekerjaan tercatat bulan ini. Catatan muncul otomatis setelah agent menyelesaikan tugas (lihat <b>Siapkan agent</b> di bawah), dari commit Git-mu, atau tambahkan sendiri.',
           noProject: 'Tanpa project', general: 'Umum', src: { agent: 'agent', me: 'manual', commit: 'commit' },
           text: 'Apa yang dikerjakan?', area: 'Bagian (mis. checkout)', details: 'Detail, satu per baris (opsional)',
           save: 'Simpan', cancel: 'Batal', del: 'Hapus', confirmDel: 'Hapus catatan ini?',
+          rProject: 'Project', allProjects: 'Semua project',
+          unassigned: (n, left) => left
+            ? `${n} catatan belum punya project, jadi tidak tampil di sini dan tidak ikut di laporan. Pilih "Semua project" lalu klik catatannya untuk memilih project.`
+            : `${n} catatan belum punya project. Klik catatannya untuk memilih project.`,
           rTitle: 'Laporan bulanan', rGroup: 'Kelompokkan per', byProject: 'Project', byDate: 'Tanggal', rName: 'Nama di laporan (opsional)',
           copy: 'Salin laporan', md: 'Unduh Markdown', csv: 'Unduh CSV (Excel)', copied: 'Laporan tersalin.', selected: 'Teks laporan dipilih di pratinjau, tekan Ctrl+C atau Cmd+C.',
           saved: 'Tersimpan.', preview: 'Pratinjau',
           setup: 'Siapkan agent',
           intro: 'Agar agent menulis catatan setiap selesai tugas, tambahkan instruksi ini ke instruksi pribadi agent-mu. Cukup sekali, berlaku di semua project, dan tidak mengubah file di repo.',
           where: 'Lokasinya: Claude Code di <code>~/.claude/CLAUDE.md</code>, Codex di <code>~/.codex/AGENTS.md</code>, Gemini CLI di <code>~/.gemini/GEMINI.md</code>.',
-          copyProtocol: 'Salin instruksi'
+          copyProtocol: 'Salin instruksi',
+          backup: 'Cadangan data',
+          backupIntro: 'Semua catatan hanya tersimpan di Orca di komputer ini. Unduh cadangan secara berkala, dan pulihkan di sini setelah pindah komputer atau memasang ulang. Memulihkan hanya menambah catatan yang belum ada; tidak ada yang ditimpa atau dihapus.',
+          backupBtn: 'Unduh cadangan', restoreBtn: 'Pulihkan dari file',
+          backedUp: (n) => `Cadangan berisi ${n} catatan.`,
+          restored: (a, s, i) => `${a} catatan dipulihkan` + (s ? `, ${s} sudah ada` : '') + (i ? `, ${i} rusak dan dilewati` : '') + '.'
         },
         en: {
           locale: 'en-GB', add: 'Add', scan: 'Collect notes', showCommits: 'Show commits', today: 'today',
-          summary: (n, d, p) => n ? `${n} items, ${d} days, ${p} project${p === 1 ? '' : 's'}` : '',
+          summary: (n, d, p, h) => n ? `${n} items, ${d} days, ${p} project${p === 1 ? '' : 's'}${h ? `, ${h}` : ''}` : '',
+          hours: 'Hours (optional)', hourUnit: 'h',
+          ruleHint: 'The project you pick also applies to other entries without a project from the same repository, including future ones.',
           empty: 'No work logged this month. Entries appear on their own when agents finish tasks (see <b>Set up your agents</b> below), from your Git commits, or add one yourself.',
           noProject: 'No project', general: 'General', src: { agent: 'agent', me: 'manual', commit: 'commit' },
           text: 'What was done?', area: 'Area (e.g. checkout)', details: 'Details, one per line (optional)',
           save: 'Save', cancel: 'Cancel', del: 'Delete', confirmDel: 'Delete this entry?',
+          rProject: 'Project', allProjects: 'All projects',
+          unassigned: (n, left) => `${n} ${n === 1 ? 'entry has' : 'entries have'} no project` + (left
+            ? `, so ${n === 1 ? 'it is' : 'they are'} hidden here and left out of the report. Choose "All projects", then click an entry to pick its project.`
+            : '. Click an entry to pick its project.'),
           rTitle: 'Monthly report', rGroup: 'Group by', byProject: 'Project', byDate: 'Date', rName: 'Name on the report (optional)',
           copy: 'Copy report', md: 'Download Markdown', csv: 'Download CSV (Excel)', copied: 'Report copied.', selected: 'Report selected in the preview. Press Ctrl+C or Cmd+C.',
           saved: 'Saved.', preview: 'Preview',
           setup: 'Set up your agents',
           intro: 'To have agents log each finished task, add these instructions to your agent’s personal instructions. Once is enough: it applies to every project and changes nothing in your repositories.',
           where: 'Where they go: Claude Code in <code>~/.claude/CLAUDE.md</code>, Codex in <code>~/.codex/AGENTS.md</code>, Gemini CLI in <code>~/.gemini/GEMINI.md</code>.',
-          copyProtocol: 'Copy instructions'
+          copyProtocol: 'Copy instructions',
+          backup: 'Back up your data',
+          backupIntro: 'Your log lives only in Orca on this computer. Download a backup now and then, and restore it here after moving to another computer or reinstalling. Restoring only adds entries that are missing; nothing is overwritten or deleted.',
+          backupBtn: 'Download backup', restoreBtn: 'Restore from file',
+          backedUp: (n) => `Backup holds ${n} ${n === 1 ? 'entry' : 'entries'}.`,
+          restored: (a, s, i) => `${a} ${a === 1 ? 'entry' : 'entries'} restored` + (s ? `, ${s} already here` : '') + (i ? `, ${i} damaged and skipped` : '') + '.'
         }
       }
       const guess = /^(id|ms|in)\b/i.test(navigator.language || '') ? 'id' : 'en'
@@ -180,6 +223,7 @@
       let data = null
       let showCommits = null
       let groupBy = 'project'
+      let reportProject = '' // '' = all projects
       let editing = null // entry id, or 'new'
       let reportCache = { md: null, csv: null }
       const s = () => STR[(data && data.lang) || guess]
@@ -231,11 +275,14 @@
         $('fText').placeholder = t.text
         $('fArea').placeholder = t.area
         $('fDetails').placeholder = t.details
+        $('fHours').placeholder = t.hours
+        $('fHint').textContent = t.ruleHint
         $('fSave').textContent = t.save
         $('fCancel').textContent = t.cancel
         $('fDelete').textContent = t.del
         $('rTitle').textContent = `${t.rTitle}, ${monthLabel(current)}`
         $('rGroupLabel').textContent = t.rGroup
+        $('rProjectLabel').textContent = t.rProject
         document.querySelector('[data-g="project"]').textContent = t.byProject
         document.querySelector('[data-g="date"]').textContent = t.byDate
         $('rName').placeholder = t.rName
@@ -247,6 +294,10 @@
         $('setupIntro').textContent = t.intro
         $('setupWhere').innerHTML = t.where
         $('copyProtocol').textContent = t.copyProtocol
+        $('backupTitle').textContent = t.backup
+        $('backupIntro').textContent = t.backupIntro
+        $('backupBtn').textContent = t.backupBtn
+        $('restoreBtn').textContent = t.restoreBtn
         $('next').disabled = current >= thisMonth()
       }
 
@@ -257,9 +308,12 @@
         const today = todayKey()
         shownDay = today
         $('showCommits').checked = showCommits
-        const items = data.entries.filter((e) => !e.hidden && (showCommits || e.source !== 'commit'))
+        const all = shown(data.entries)
+        reportControls(all)
+        // The list shows exactly what the report will hold.
+        const items = reportProject ? all.filter((e) => e.projectId === reportProject) : all
         const days = groupMap(items.slice().sort((a, b) => b.at - a.at), (e) => e.date)
-        $('summary').textContent = t.summary(items.length, days.size, new Set(items.map((e) => e.projectName || '')).size)
+        $('summary').textContent = t.summary(items.length, days.size, new Set(items.map((e) => e.projectName || '')).size, hoursText(items))
 
         if (!items.length) {
           $('days').replaceChildren(el('div', { className: 'empty', html: t.empty }))
@@ -268,7 +322,7 @@
         $('days').replaceChildren(...[...days.entries()].map(([day, list]) => {
           const projects = groupMap(list.slice().sort((a, b) => a.at - b.at), (e) => e.projectName || t.noProject)
           return el('div', { className: 'day' + (day === today ? ' today' : '') },
-            el('h2', { data: { today: t.today } }, dayLabel(day), el('span', { className: 'n', textContent: String(list.length) })),
+            el('h2', { data: { today: t.today } }, dayLabel(day), el('span', { className: 'n', textContent: [list.length, hoursText(list)].filter(Boolean).join(' · ') })),
             ...[...projects.entries()].map(([proj, pList]) => el('div', { className: 'proj' },
               el('h3', { textContent: proj }),
               ...[...groupMap(pList, (e) => e.area || t.general).entries()].map(([area, aList]) => el('div', { className: 'area' },
@@ -280,6 +334,36 @@
         }))
       }
 
+      // Same rule as the worker's visible(): hidden entries go, and a commit goes when the same day and
+      // project already has a written note, so the list matches the report.
+      const coverKey = (e) => `${e.date}|${e.projectId ?? e.projectName ?? ''}`
+      function shown(entries) {
+        const list = entries.filter((e) => !e.hidden && (showCommits || e.source !== 'commit'))
+        const written = new Set(list.filter((e) => e.source !== 'commit').map(coverKey))
+        return list.filter((e) => e.source !== 'commit' || !written.has(coverKey(e)))
+      }
+      function hoursText(list) {
+        const h = Math.round(list.reduce((t, e) => t + (e.hours || 0), 0) * 100) / 100
+        return h ? fmtHours(h) : ''
+      }
+      const fmtHours = (h) => `${h.toLocaleString(s().locale, { maximumFractionDigits: 2 })} ${s().hourUnit}`
+
+      // Project choices are the projects with work this month; the choice is kept across months when it still applies.
+      function reportControls(items) {
+        const t = s()
+        const names = new Map()
+        for (const e of items) if (e.projectId && !names.has(e.projectId)) names.set(e.projectId, e.projectName || e.projectId)
+        if (reportProject && !names.has(reportProject)) reportProject = ''
+        $('rProject').replaceChildren(
+          el('option', { value: '', textContent: t.allProjects }),
+          ...[...names].sort((a, b) => a[1].localeCompare(b[1])).map(([id, name]) => el('option', { value: id, textContent: name }))
+        )
+        $('rProject').value = reportProject
+        const loose = items.filter((e) => !e.projectId).length
+        $('rWarn').textContent = loose ? t.unassigned(loose, !!reportProject) : ''
+        $('rWarn').hidden = !loose
+      }
+
       function entry(e) {
         const t = s()
         const open = () => startEdit(e)
@@ -288,6 +372,7 @@
           on: { click: open, keydown: (ev) => { if (ev.key === 'Enter') open() } }
         },
           e.text,
+          e.hours ? el('span', { className: 'src', textContent: fmtHours(e.hours) }) : null,
           el('span', { className: 'src', textContent: e.source === 'commit' ? `commit ${e.hash.slice(0, 7)}` : t.src[e.source] }),
           e.details && e.details.length ? el('ul', {}, ...e.details.map((d) => el('li', { textContent: d }))) : null
         )
@@ -307,6 +392,8 @@
         $('fArea').value = e ? e.area || '' : ''
         $('fDate').value = e ? e.date : (current === thisMonth() ? todayKey() : `${current}-01`)
         $('fDetails').value = e ? (e.details || []).join('\n') : ''
+        $('fHours').value = e && e.hours ? e.hours : ''
+        $('fHint').hidden = !(e && e.repo && !e.projectId)
         $('fDelete').hidden = !e
         $('form').hidden = false
         $('form').scrollIntoView({ block: 'nearest' })
@@ -317,8 +404,9 @@
       async function refreshReport() {
         reportCache = { md: null, csv: null }
         try {
-          const md = await plugin.request('worklog.export', { month: current, format: 'md', groupBy, includeCommits: showCommits, name: $('rName').value }, { timeoutMs: 15000 })
-          const csv = await plugin.request('worklog.export', { month: current, format: 'csv', includeCommits: showCommits }, { timeoutMs: 15000 })
+          const projectId = reportProject || null
+          const md = await plugin.request('worklog.export', { month: current, format: 'md', groupBy, includeCommits: showCommits, name: $('rName').value, projectId }, { timeoutMs: 15000 })
+          const csv = await plugin.request('worklog.export', { month: current, format: 'csv', includeCommits: showCommits, projectId }, { timeoutMs: 15000 })
           reportCache = { md, csv }
           $('rPreview').value = md.text
         } catch (e) { showError(e) }
@@ -334,17 +422,21 @@
         } catch {}
       }
 
-      async function save(file) {
+      // Returns true when the file was written (or handed to the browser's download).
+      async function save(file, msgId = 'rMsg', after = '') {
         if (!file) return
-        const mimeType = file.fileName.endsWith('.csv') ? 'text/csv' : 'text/markdown'
+        const ext = file.fileName.split('.').pop()
+        const mimeType = { csv: 'text/csv', json: 'application/json' }[ext] || 'text/markdown'
         try {
           const r = await window.orca.host.call('files.saveAs', { suggestedName: file.fileName, mimeType, data: file.text })
-          $('rMsg').textContent = r && r.status === 'saved' ? s().saved : ''
+          const ok = r && r.status === 'saved'
+          $(msgId).textContent = ok ? [s().saved, after].filter(Boolean).join(' ') : ''
         } catch {
           // Host save dialog unavailable in this panel: fall back to a plain browser download.
           const url = URL.createObjectURL(new Blob([file.text], { type: mimeType }))
           el('a', { href: url, download: file.fileName }).click()
           setTimeout(() => URL.revokeObjectURL(url), 1000)
+          $(msgId).textContent = after
         }
       }
 
@@ -365,7 +457,7 @@
       })
       $('form').addEventListener('submit', async (ev) => {
         ev.preventDefault()
-        const payload = { text: $('fText').value, area: $('fArea').value, projectId: $('fProject').value || null, date: $('fDate').value }
+        const payload = { text: $('fText').value, area: $('fArea').value, projectId: $('fProject').value || null, date: $('fDate').value, hours: $('fHours').value }
         try {
           if (editing === 'new') await ask('worklog.add', { ...payload, details: $('fDetails').value })
           else await ask('worklog.update', { id: editing, month: current, ...payload, details: $('fDetails').value })
@@ -377,6 +469,7 @@
         for (const o of document.querySelectorAll('[data-g]')) o.setAttribute('aria-pressed', String(o === b))
         refreshReport()
       })
+      $('rProject').addEventListener('change', () => { reportProject = $('rProject').value; render(); refreshReport() })
       let nameTimer
       $('rName').addEventListener('input', () => { clearTimeout(nameTimer); nameTimer = setTimeout(refreshReport, 400) })
       $('rCopy').addEventListener('click', async () => {
@@ -387,6 +480,26 @@
           $('rPreview').focus(); $('rPreview').select()
           $('rMsg').textContent = s().selected
         }
+      })
+      $('backupBtn').addEventListener('click', async () => {
+        $('bMsg').textContent = ''
+        try {
+          const b = await ask('worklog.backup', {}, 60000)
+          await save(b, 'bMsg', s().backedUp(b.entries))
+        } catch {}
+      })
+      $('restoreBtn').addEventListener('click', () => $('restoreFile').click())
+      $('restoreFile').addEventListener('change', async () => {
+        const file = $('restoreFile').files[0]
+        $('restoreFile').value = ''
+        if (!file) return
+        $('bMsg').textContent = ''
+        $('restoreBtn').disabled = true
+        try {
+          const r = await ask('worklog.restore', { text: await file.text() }, 120000)
+          $('bMsg').textContent = s().restored(r.added, r.skipped, r.invalid)
+          await load()
+        } catch {} finally { $('restoreBtn').disabled = false }
       })
       $('rMd').addEventListener('click', () => save(reportCache.md))
       $('rCsv').addEventListener('click', () => save(reportCache.csv))

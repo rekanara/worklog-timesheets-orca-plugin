@@ -20,10 +20,59 @@ export const dayOf = (ms) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 const monthOf = (day) => day.slice(0, 7)
+export const slug = (s) => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'project'
 const newId = () => `e${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
 
 function fail(code, message) {
   return Object.assign(new Error(message), { code })
+}
+
+// Hours worked on one entry: '' or 0 clears it; accepts "1,5" as well as 1.5.
+export function parseHours(v) {
+  if (v === '' || v == null) return null
+  const n = typeof v === 'number' ? v : Number(String(v).trim().replace(',', '.'))
+  if (!Number.isFinite(n) || n < 0 || n > 24) throw fail('invalid_params', 'hours must be between 0 and 24')
+  return n ? Math.round(n * 100) / 100 : null
+}
+// An entry read from a backup file: keep only known fields with sane types, or drop it (null).
+export function cleanEntry(x) {
+  if (!x || typeof x !== 'object' || typeof x.id !== 'string' || !x.id || x.id.length > 64) return null
+  if (!DATE_RE.test(x.date ?? '') || typeof x.text !== 'string' || !x.text.trim()) return null
+  if (!['agent', 'me', 'commit'].includes(x.source)) return null
+  const str = (v, n) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, n) : null)
+  const hash = str(x.hash, 40)
+  if (x.source === 'commit' && !hash) return null
+  let hours = null
+  try { hours = parseHours(x.hours) } catch {}
+  const [y, mo, d] = x.date.split('-').map(Number)
+  return {
+    id: x.id,
+    date: x.date,
+    at: Number.isFinite(x.at) ? x.at : new Date(y, mo - 1, d, 12).getTime(),
+    source: x.source,
+    ...(x.source === 'commit' ? { hash } : {}),
+    repo: str(x.repo, 1024),
+    projectId: str(x.projectId, 200),
+    projectName: str(x.projectName, 200),
+    area: str(x.area, 60),
+    text: x.text.trim().slice(0, 300),
+    hours,
+    details: Array.isArray(x.details) ? x.details.filter((t) => typeof t === 'string').slice(0, 5).map((t) => t.slice(0, 300)) : [],
+    branch: str(x.branch, 200),
+    ...(x.hidden === true ? { hidden: true } : {})
+  }
+}
+const BACKUP_FORMAT = 'worklog-backup'
+const MAX_BACKUP_CHARS = 50 * 1024 * 1024
+
+export const sumHours =(list) => Math.round(list.reduce((t, e) => t + (e.hours || 0), 0) * 100) / 100
+
+// A commit is noise once the same day and project already has a written note (agent or manual).
+const coverKey = (e) => `${e.date}|${e.projectId ?? e.projectName ?? ''}`
+export function visible(list, includeCommits) {
+  const shown = list.filter((e) => !e.hidden && (includeCommits || e.source !== 'commit'))
+  const written = new Set(shown.filter((e) => e.source !== 'commit').map(coverKey))
+  return shown.filter((e) => e.source !== 'commit' || !written.has(coverKey(e)))
 }
 
 export function protocol(lang) {
@@ -157,18 +206,30 @@ export default function activate(orca) {
       meta = meta && typeof meta === 'object' ? meta : {}
       meta.seenCommits ??= []
       meta.commitsSince ??= {}
+      meta.repoProjects ??= {} // repo (git common dir or folder) -> projectId, learned from the user's edits
+      meta.months ??= [] // every month key ever written; storage cannot list its keys
     }
     return meta
+  }
+  // Months that may hold entries: the index, plus the last five years for data saved before the index existed.
+  async function allMonthKeys() {
+    const keys = new Set([...(await getMeta()).months, ...months.keys()])
+    const now = new Date()
+    for (let i = -1; i < 60; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+      keys.add(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`)
+    }
+    return [...keys].filter((k) => MONTH_RE.test(k)).sort()
   }
   // Writes run one after another. The returned promise rejects when this write fails, so callers
   // can keep note files on disk and report the error; the queue itself keeps going.
   function persist(keys) {
     const run = saving.then(async () => {
       for (const k of keys) await call('storage.set', { key: `entries:${k}`, value: months.get(k) })
-      if (meta) {
-        meta.seenCommits = meta.seenCommits.slice(-6000)
-        await call('storage.set', { key: 'meta', value: meta })
-      }
+      const m = await getMeta()
+      for (const k of keys) if (!m.months.includes(k)) m.months.push(k)
+      m.seenCommits = m.seenCommits.slice(-6000)
+      await call('storage.set', { key: 'meta', value: m })
     })
     saving = run.catch((e) => orca.log(`save failed: ${e.message}`))
     return run
@@ -216,7 +277,7 @@ export default function activate(orca) {
   }
 
   // Reads notes but leaves the files in place; scan() deletes them once the entries are saved.
-  async function collectNotes(ws, project, files) {
+  async function collectNotes(ws, { repo, projectId, projectName }, files) {
     const dir = path.join(ws.path, NOTES_DIR)
     let names
     try {
@@ -239,8 +300,9 @@ export default function activate(orca) {
           date: dayOf(at),
           at,
           source: 'agent',
-          projectId: ws.projectId ?? null,
-          projectName: project?.name ?? ws.project ?? ws.name,
+          repo,
+          projectId,
+          projectName,
           area: note.area || areaFromBranch(ws.branch),
           text: note.text,
           details: note.details,
@@ -278,6 +340,7 @@ export default function activate(orca) {
           at,
           source: 'commit',
           hash: hash.slice(0, 10),
+          repo: common,
           projectId,
           projectName,
           area: areaFromPaths(files.filter(Boolean)),
@@ -301,16 +364,21 @@ export default function activate(orca) {
       const repos = new Map()
       const found = []
       const noteFiles = []
-      const metaBefore = JSON.stringify(await getMeta())
+      const m = await getMeta()
+      const metaBefore = JSON.stringify(m)
       for (const ws of workspaces) {
         if (!isLocal(ws) || !ws.path) continue
-        const project = byId.get(ws.projectId)
         const common = await gitCommonDir(ws.path).catch(() => null)
+        const repo = common ?? path.resolve(ws.path)
+        // Orca's own project wins; otherwise use the project the user picked before for this repo.
+        const learned = byId.has(m.repoProjects[repo]) ? m.repoProjects[repo] : null
+        const projectId = ws.projectId ?? learned
+        const owner = { repo, projectId, projectName: byId.get(projectId)?.name ?? ws.project ?? ws.name }
         if (common) {
           if (s.hideFromGit !== false) await ensureExcluded(common).catch(() => {})
-          if (!repos.has(common)) repos.set(common, { common, cwd: ws.path, projectId: ws.projectId ?? null, projectName: project?.name ?? ws.project ?? ws.name })
+          if (!repos.has(common)) repos.set(common, { common, cwd: ws.path, ...owner })
         }
-        found.push(...(await collectNotes(ws, project, noteFiles)))
+        found.push(...(await collectNotes(ws, owner, noteFiles)))
       }
       if (commits && s.includeCommits !== false) {
         found.push(...(await collectCommits([...repos.values()])))
@@ -345,22 +413,24 @@ export default function activate(orca) {
   const general = (l) => (l === 'id' ? 'Umum' : 'General')
   const noProject = (l) => (l === 'id' ? 'Tanpa project' : 'No project')
 
-  function visible(list, includeCommits) {
-    return list.filter((e) => !e.hidden && (includeCommits || e.source !== 'commit'))
-  }
+  const fmtHours = (h, l) => `${h.toLocaleString(l === 'id' ? 'id-ID' : 'en-GB', { maximumFractionDigits: 2 })} ${l === 'id' ? 'jam' : 'h'}`
 
-  function report(key, list, { groupBy, l, includeCommits, name }) {
+  function report(key, list, { groupBy, l, includeCommits, name, projectName }) {
     const items = visible(list, includeCommits).sort((a, b) => a.at - b.at)
+    const forProject = projectName ? ` · ${projectName}` : ''
     const T = l === 'id'
-      ? { title: `Laporan kerja ${monthTitle(key, l)}`, by: name ? `Disusun oleh ${name}.` : '', count: (n, d) => `${n} pekerjaan dalam ${d} hari kerja.`, empty: 'Belum ada catatan pekerjaan bulan ini.' }
-      : { title: `Work report, ${monthTitle(key, l)}`, by: name ? `Prepared by ${name}.` : '', count: (n, d) => `${n} items over ${d} working days.`, empty: 'No work logged this month.' }
+      ? { title: `Laporan kerja ${monthTitle(key, l)}${forProject}`, by: name ? `Disusun oleh ${name}.` : '', count: (n, d, h) => `${n} pekerjaan dalam ${d} hari kerja${h ? `, total ${h}` : ''}.`, empty: 'Belum ada catatan pekerjaan bulan ini.' }
+      : { title: `Work report, ${monthTitle(key, l)}${forProject}`, by: name ? `Prepared by ${name}.` : '', count: (n, d, h) => `${n} items over ${d} working days${h ? `, ${h} in total` : ''}.`, empty: 'No work logged this month.' }
     const lines = [`# ${T.title}`, '']
     if (!items.length) return [...lines, T.empty, ''].join('\n')
     const days = new Set(items.map((e) => e.date)).size
-    lines.push([T.by, T.count(items.length, days)].filter(Boolean).join(' '), '')
+    const total = sumHours(items)
+    const hoursOf = (arr) => { const h = sumHours(arr); return h ? ` · ${fmtHours(h, l)}` : '' }
+    lines.push([T.by, T.count(items.length, days, total ? fmtHours(total, l) : '')].filter(Boolean).join(' '), '')
     const line = (e, withDate) => {
       const tag = e.source === 'commit' ? ` (commit ${e.hash})` : ''
-      const head = `- ${withDate ? `${fmtDay(e.date, l, false)}: ` : ''}${e.text}${tag}`
+      const hrs = e.hours ? ` (${fmtHours(e.hours, l)})` : ''
+      const head = `- ${withDate ? `${fmtDay(e.date, l, false)}: ` : ''}${e.text}${hrs}${tag}`
       return [head, ...e.details.map((d) => `  - ${d}`)].join('\n')
     }
     const group = (arr, keyFn) => {
@@ -374,7 +444,7 @@ export default function activate(orca) {
     }
     if (groupBy === 'date') {
       for (const [day, dayItems] of group(items, (e) => e.date)) {
-        lines.push(`## ${fmtDay(day, l)}`, '')
+        lines.push(`## ${fmtDay(day, l)}${hoursOf(dayItems)}`, '')
         for (const [proj, pItems] of group(dayItems, (e) => e.projectName || noProject(l))) {
           lines.push(`### ${proj}`, '')
           for (const [area, aItems] of group(pItems, (e) => e.area || general(l))) {
@@ -384,7 +454,7 @@ export default function activate(orca) {
       }
     } else {
       for (const [proj, pItems] of group(items, (e) => e.projectName || noProject(l))) {
-        lines.push(`## ${proj}`, '')
+        lines.push(`## ${proj}${hoursOf(pItems)}`, '')
         for (const [area, aItems] of group(pItems, (e) => e.area || general(l))) {
           lines.push(`### ${area}`, ...aItems.map((e) => line(e, true)), '')
         }
@@ -394,12 +464,13 @@ export default function activate(orca) {
   }
 
   function csv(list, includeCommits, l) {
-    const head = l === 'id' ? ['Tanggal', 'Project', 'Bagian', 'Pekerjaan', 'Detail', 'Sumber'] : ['Date', 'Project', 'Area', 'Work', 'Details', 'Source']
-    const src = { agent: 'agent', me: l === 'id' ? 'manual' : 'manual', commit: 'commit' }
+    const head = l === 'id' ? ['Tanggal', 'Project', 'Bagian', 'Pekerjaan', 'Jam', 'Detail', 'Sumber'] : ['Date', 'Project', 'Area', 'Work', 'Hours', 'Details', 'Source']
+    const src = { agent: 'agent', me: 'manual', commit: 'commit' }
     const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
+    // Hours use a dot (1.5) so spreadsheets in any locale read them as numbers after import.
     const rows = visible(list, includeCommits)
       .sort((a, b) => a.at - b.at)
-      .map((e) => [e.date, e.projectName || '', e.area || '', e.text, e.details.join('; '), e.source === 'commit' ? `commit ${e.hash}` : src[e.source]].map(q).join(','))
+      .map((e) => [e.date, e.projectName || '', e.area || '', e.text, e.hours ?? '', e.details.join('; '), e.source === 'commit' ? `commit ${e.hash}` : src[e.source]].map(q).join(','))
     return '\uFEFF' + [head.map(q).join(','), ...rows].join('\r\n') + '\r\n'
   }
 
@@ -436,9 +507,10 @@ export default function activate(orca) {
 
   orca.panels.handle('worklog.scan', async () => ({ added: await scan({ commits: true }) }))
 
-  orca.panels.handle('worklog.add', async ({ date, projectId = null, area = '', text, details = '' } = {}) => {
+  orca.panels.handle('worklog.add', async ({ date, projectId = null, area = '', text, details = '', hours } = {}) => {
     if (!DATE_RE.test(date ?? '')) throw fail('invalid_params', 'date must be YYYY-MM-DD')
     if (typeof text !== 'string' || !text.trim()) throw fail('invalid_params', 'Describe the work.')
+    const h = parseHours(hours)
     let project = null
     if (projectId) project = (await call('project.list')).projects.find((p) => p.id === projectId) ?? null
     const [y, mo, d] = date.split('-').map(Number)
@@ -451,17 +523,22 @@ export default function activate(orca) {
       projectName: project?.name ?? null,
       area: String(area).trim().slice(0, 60) || null,
       text: text.trim().slice(0, 300),
+      hours: h,
       details: String(details).split('\n').map((x) => x.replace(/^[-*]\s*/, '').trim()).filter(Boolean).slice(0, 5),
       branch: null
     }])
     return { ok: true }
   })
 
-  orca.panels.handle('worklog.update', async ({ id, month: hint, text, area, projectId, date, hidden, details } = {}) => {
+  orca.panels.handle('worklog.update', async ({ id, month: hint, text, area, projectId, date, hidden, details, hours } = {}) => {
     // Validate and look everything up before changing the entry, so a bad request changes nothing.
     if (date !== undefined && !DATE_RE.test(date ?? '')) throw fail('invalid_params', 'date must be YYYY-MM-DD')
+    const h = hours === undefined ? undefined : parseHours(hours)
     const { key, list, e } = await findEntry(id, hint)
     const p = projectId ? (await call('project.list')).projects.find((x) => x.id === projectId) : null
+    const touched = [key]
+    if (h !== undefined) e.hours = h
+    if (projectId !== undefined && e.repo && (p?.id ?? null) !== (e.projectId ?? null)) touched.push(...(await learnProject(e, p)))
     if (typeof details === 'string') e.details = details.split('\n').map((x) => x.replace(/^[-*]\s*/, '').trim()).filter(Boolean).slice(0, 5).map((x) => x.slice(0, 300))
     if (typeof text === 'string' && text.trim()) e.text = text.trim().slice(0, 300)
     if (typeof area === 'string') e.area = area.trim().slice(0, 60) || null
@@ -470,7 +547,6 @@ export default function activate(orca) {
       e.projectName = p?.name ?? null
     }
     if (typeof hidden === 'boolean') e.hidden = hidden
-    const touched = [key]
     if (date !== undefined && date !== e.date) {
       e.date = date
       if (monthOf(date) !== key) {
@@ -479,10 +555,33 @@ export default function activate(orca) {
         touched.push(monthOf(date))
       }
     }
-    await persist(touched)
-    orca.panels.post('worklog.changed', { months: touched })
+    const changedMonths = [...new Set(touched)]
+    await persist(changedMonths)
+    orca.panels.post('worklog.changed', { months: changedMonths })
     return { ok: true }
   })
+
+  // Picking a project for an entry with no project (or correcting a learned one) teaches the repo
+  // rule: later notes and commits from that repo get the project, and so do its other loose entries
+  // in the months already loaded. Orca's own workspace project is never overridden.
+  async function learnProject(e, p) {
+    const rules = (await getMeta()).repoProjects
+    if (e.projectId != null && rules[e.repo] !== e.projectId) return []
+    if (p) rules[e.repo] = p.id
+    else delete rules[e.repo]
+    if (!p) return []
+    const changed = []
+    for (const [k, list] of months) {
+      for (const x of list) {
+        if (x !== e && x.repo === e.repo && !x.projectId) {
+          x.projectId = p.id
+          x.projectName = p.name
+          changed.push(k)
+        }
+      }
+    }
+    return changed
+  }
 
   orca.panels.handle('worklog.delete', async ({ id, month: hint } = {}) => {
     const { key, list, e } = await findEntry(id, hint)
@@ -492,16 +591,79 @@ export default function activate(orca) {
     return { ok: true }
   })
 
-  orca.panels.handle('worklog.export', async ({ month: key, format = 'md', groupBy = 'project', includeCommits, name = '' } = {}) => {
+  // ---- backup ----
+
+  // Everything needed to rebuild the log elsewhere: all entries, the learned repo projects, and the
+  // commits already taken (so a restored machine does not log them a second time).
+  orca.panels.handle('worklog.backup', async () => {
+    const m = await getMeta()
+    const out = {}
+    for (const k of await allMonthKeys()) {
+      const list = await month(k)
+      if (list.length) out[k] = list
+    }
+    const text = JSON.stringify({ format: BACKUP_FORMAT, version: 1, exportedAt: new Date().toISOString(), months: out, seenCommits: m.seenCommits, repoProjects: m.repoProjects }, null, 1)
+    return { fileName: `worklog-backup-${dayOf(Date.now())}.json`, text, entries: Object.values(out).flat().length }
+  })
+
+  // Merges a backup into the log: entries already present (same id) are skipped, nothing is overwritten.
+  orca.panels.handle('worklog.restore', async ({ text } = {}) => {
+    if (typeof text !== 'string' || text.length > MAX_BACKUP_CHARS) throw fail('invalid_params', 'Not a Worklog backup file.')
+    let data
+    try {
+      data = JSON.parse(text)
+    } catch {
+      throw fail('invalid_params', 'Not a Worklog backup file.')
+    }
+    if (data?.format !== BACKUP_FORMAT || !data.months || typeof data.months !== 'object') throw fail('invalid_params', 'Not a Worklog backup file.')
+    const incoming = Object.values(data.months).flatMap((v) => (Array.isArray(v) ? v : [])).map(cleanEntry)
+    const valid = incoming.filter(Boolean)
+    const keys = new Set([...(await allMonthKeys()), ...valid.map((e) => monthOf(e.date))])
+    // Same id = same entry; for commits the hash also counts, since each machine gives its own id.
+    const known = new Set()
+    const sig = (e) => (e.source === 'commit' ? `commit:${e.hash.slice(0, 10)}` : null)
+    for (const k of keys) for (const e of await month(k)) { known.add(e.id); if (sig(e)) known.add(sig(e)) }
+    const fresh = []
+    for (const e of valid) {
+      if (known.has(e.id) || (sig(e) && known.has(sig(e)))) continue
+      known.add(e.id)
+      if (sig(e)) known.add(sig(e))
+      fresh.push(e)
+    }
+    await addEntries(fresh)
+    const m = await getMeta()
+    if (Array.isArray(data.seenCommits)) {
+      const seen = new Set(m.seenCommits)
+      for (const h of data.seenCommits) if (typeof h === 'string' && /^[0-9a-f]{7,64}$/.test(h) && !seen.has(h)) { seen.add(h); m.seenCommits.push(h) }
+    }
+    if (data.repoProjects && typeof data.repoProjects === 'object') {
+      for (const [repo, id] of Object.entries(data.repoProjects)) if (typeof id === 'string' && !(repo in m.repoProjects)) m.repoProjects[repo] = id
+    }
+    await persist([])
+    return { added: fresh.length, skipped: valid.length - fresh.length, invalid: incoming.length - valid.length }
+  })
+
+  // projectId limits the report to one project, so one client's report never carries another's work.
+  orca.panels.handle('worklog.export', async ({ month: key, format = 'md', groupBy = 'project', includeCommits, name = '', projectId = null } = {}) => {
     checkMonth(key)
     const s = await settings()
     const l = lang(s)
     const inc = typeof includeCommits === 'boolean' ? includeCommits : s.includeCommits !== false
-    const list = await month(key)
-    if (format === 'csv') return { fileName: `worklog-${key}.csv`, text: csv(list, inc, l) }
+    let list = await month(key)
+    let projectName = null
+    if (projectId) {
+      list = list.filter((e) => e.projectId === projectId)
+      let current = null
+      try {
+        current = (await call('project.list')).projects.find((p) => p.id === projectId)
+      } catch {}
+      projectName = current?.name ?? list.find((e) => e.projectName)?.projectName ?? String(projectId)
+    }
+    const base = `worklog-${key}${projectName ? `-${slug(projectName)}` : ''}`
+    if (format === 'csv') return { fileName: `${base}.csv`, text: csv(list, inc, l) }
     return {
-      fileName: `worklog-${key}.md`,
-      text: report(key, list, { groupBy: groupBy === 'date' ? 'date' : 'project', l, includeCommits: inc, name: String(name).slice(0, 80) })
+      fileName: `${base}.md`,
+      text: report(key, list, { groupBy: groupBy === 'date' ? 'date' : 'project', l, includeCommits: inc, name: String(name).slice(0, 80), projectName })
     }
   })
 
