@@ -5,6 +5,17 @@
   "name": "Worklog: Timesheets",
   "version": "0.1.0",
   "description": "Timesheet and work log written by your coding agents: what was done each day, per project and area, collected automatically from agent notes and Git commits. Monthly report export as Markdown or CSV for clients or your manager.",
+  "icon": "assets/icon.png",
+  "cover": {
+    "path": "assets/screenshot-panel.png",
+    "alt": "Worklog panel in Orca's sidebar: today's work grouped by client project and area, with hours, agent notes and a commit, plus the status bar item."
+  },
+  "screenshots": [
+    {
+      "path": "assets/screenshot-panel.png",
+      "alt": "Worklog panel in Orca's sidebar: today's work grouped by client project and area, with hours, agent notes and a commit, plus the status bar item."
+    }
+  ],
   "license": "MIT",
   "engines": {
     "orca": ">=1.4.259"
